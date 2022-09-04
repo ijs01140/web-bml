@@ -120,6 +120,10 @@ export namespace BML {
             return BMLDivElement;
         } else if (node instanceof globalThis.HTMLHtmlElement) {
             return BMLBmlElement;
+        } else if (node instanceof globalThis.HTMLTextAreaElement) {
+            return BMLTextAreaElement;
+        } else if (node instanceof globalThis.HTMLFormElement) {
+            return BMLFormElement;
         } else if (node instanceof globalThis.HTMLElement) {
             console.error(node);
             return HTMLElement;
@@ -233,6 +237,10 @@ export namespace BML {
         };
         constructor(node: globalThis.CharacterData, ownerDocument: BMLDocument) {
             super(node, ownerDocument);
+            if (node.parentElement != null) {
+                node.parentElement.style.fontSize = "var(--font-size)";
+                node.parentElement.style.lineHeight = "var(--line-height)";
+            }
             const computedStyle = window.getComputedStyle(this.getParentBlock(node)!);
             const display = computedStyle.getPropertyValue("--display").trim();
             if (display === "-wap-marquee" || (computedStyle.letterSpacing !== "normal" && computedStyle.letterSpacing !== "0px")) {
