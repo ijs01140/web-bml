@@ -1091,30 +1091,19 @@ export namespace BML {
 
     // STD B-24 第二分冊 (2/2) 第二編 付属2 表5-3参照
     // 画像の大きさは固定
-    function fixImageSize(resolution: string, displayWidth: string, displayHeight: string, width: number, height: number, type: string): { width?: number, height?: number } {
-        // 非表示のとき
-        if (displayWidth === "0px" || displayHeight === "0px") {
-            return { width: 0, height: 0 };
-        }
-        type = type.toLowerCase();
-        const is720x480 = resolution.trim() === "720x480";
-        if (type === "image/jpeg") {
-            if (is720x480) {
-                if (width % 2 != 0) {
-                    return { width: width - 1, height };
-                }
-                return { width, height };
+    function fixJPEGScaling(resolution: string, displayWidth: string, displayHeight: string, width: number, height: number): { width?: number, height?: number } {
+        if (resolution.trim() === "720x480") {
+            if (width % 2 != 0) {
+                return { width: width - 1, height };
             }
-            // 960x540座標系のときは1/2にスケーリング
-            // ただし表示サイズが960x540であり、画像サイズも960x540の場合はそのまま
-            if (displayWidth === "960px" && displayHeight === "540px" && width === 960 && height === 540) {
-                return { width, height };
-            }
-            return { width: Math.floor(width / 2), height: Math.floor(height / 2) };
-        } else if (type === "image/x-arib-png" || type === "image/x-arib-mng") {
             return { width, height };
         }
-        return {};
+        // 960x540座標系のときは1/2にスケーリング
+        // ただし表示サイズが960x540であり、画像サイズも960x540の場合はそのまま
+        if (displayWidth === "960px" && displayHeight === "540px" && width === 960 && height === 540) {
+            return { width, height };
+        }
+        return { width: Math.floor(width / 2), height: Math.floor(height / 2) };
     }
     // impl
     export class HTMLObjectElement extends HTMLElement {
@@ -1152,9 +1141,7 @@ export namespace BML {
                 this.effect = undefined;
                 this.animation = undefined;
             }
-            // Chromeではdataが未設定でtypeが設定されている場合枠線が表示されてしまうためtypeも消す
-            this.node.removeAttribute("type");
-            this.node.removeAttribute("data");
+            this.node.querySelector("img")?.remove();
         }
 
         protected updateAnimation() {
@@ -1215,7 +1202,8 @@ export namespace BML {
                 let imageUrl: CachedFileMetadata | undefined;
                 const isPNG = aribType?.toLowerCase() === "image/x-arib-png";
                 const isMNG = aribType?.toLowerCase() === "image/x-arib-mng";
-                let imageType: string | undefined;
+                let imageWidth: number | undefined;
+                let imageHeight: number | undefined;
                 if (isPNG || isMNG) {
                     const clutCss = window.getComputedStyle(this.node).getPropertyValue("--clut");
                     const clutUrl = clutCss == null ? null : parseCSSValue(clutCss);
@@ -1226,12 +1214,7 @@ export namespace BML {
                     if (isMNG) {
                         const clut = fetchedClut == null ? defaultCLUT : readCLUT(Buffer.from(fetchedClut?.buffer));
                         const keyframes = aribMNGToCSSAnimation(Buffer.from(fetched.data), clut);
-                        this.node.removeAttribute("data");
-                        if (this.animation != null) {
-                            this.animation.cancel();
-                            this.animation = undefined;
-                            this.effect = undefined;
-                        }
+                        this.delete();
                         if (keyframes == null) {
                             return;
                         }
@@ -1239,25 +1222,6 @@ export namespace BML {
                         this.animation = new Animation(this.effect);
                         for (const blob of keyframes.blobs) {
                             fetched.blobUrl.set(blob, { blobUrl: blob });
-                        }
-                        this.node.style.maxWidth = "";
-                        this.node.style.minWidth = "";
-                        this.node.style.maxHeight = "";
-                        this.node.style.minHeight = "";
-                        const { width: displayWidth, height: displayHeight } = window.getComputedStyle(this.node);
-                        const { width, height } = fixImageSize(
-                            window.getComputedStyle((bmlNodeToNode(this.ownerDocument.documentElement) as globalThis.HTMLElement).querySelector("body")!).getPropertyValue("resolution"),
-                            displayWidth,
-                            displayHeight,
-                            keyframes.width,
-                            keyframes.height,
-                            (aribType ?? this.type)
-                        );
-                        if (width != null && height != null) {
-                            this.node.style.maxWidth = width + "px";
-                            this.node.style.minWidth = width + "px";
-                            this.node.style.maxHeight = height + "px";
-                            this.node.style.minHeight = height + "px";
                         }
                         // streamloopingは1固定で運用されるため考慮しない
                         // streamstatus=playのときstreampositionで指定されたフレームから再生開始
@@ -1277,7 +1241,6 @@ export namespace BML {
                             imageUrl = { blobUrl: URL.createObjectURL(blob), width: png.width, height: png.height };
                             fetched.blobUrl.set(fetchedClut, imageUrl);
                         }
-                        imageType = "image/png";
                     }
                 } else if (aribType?.toLowerCase() === "image/jpeg") {
                     imageUrl = fetched.blobUrl.get("BT.709");
@@ -1294,9 +1257,7 @@ export namespace BML {
                         }
                         fetched.blobUrl.set("BT.709", imageUrl);
                     }
-                    imageType = "image/jpeg";
                 } else if (aribType?.toLowerCase() === "image/gif") {
-                    imageType = "image/gif";
                     imageUrl = { blobUrl: this.ownerDocument.resources.getCachedFileBlobUrl(fetched) };
                 } else {
                     this.delete();
@@ -1307,38 +1268,40 @@ export namespace BML {
                     return;
                 }
                 if (this.ownerDocument.resources.profile !== Profile.TrProfileC) {
-                    if (imageUrl.width != null && imageUrl.height != null) {
-                        this.node.style.maxWidth = "";
-                        this.node.style.minWidth = "";
-                        this.node.style.maxHeight = "";
-                        this.node.style.minHeight = "";
+                    if (imageUrl.width != null && imageUrl.height != null && aribType?.toLowerCase() === "image/jpeg") {
+                        const resolution = window.getComputedStyle((bmlNodeToNode(this.ownerDocument.documentElement) as globalThis.HTMLElement).querySelector("body")!).getPropertyValue("--resolution");
                         const { width: displayWidth, height: displayHeight } = window.getComputedStyle(this.node);
-                        const { width, height } = fixImageSize(
-                            window.getComputedStyle((bmlNodeToNode(this.ownerDocument.documentElement) as globalThis.HTMLElement).querySelector("body")!).getPropertyValue("--resolution"),
-                            displayWidth,
-                            displayHeight,
-                            imageUrl.width,
-                            imageUrl.height,
-                            (aribType ?? this.type)
-                        );
-                        if (width != null && height != null) {
-                            this.node.style.maxWidth = width + "px";
-                            this.node.style.minWidth = width + "px";
-                            this.node.style.maxHeight = height + "px";
-                            this.node.style.minHeight = height + "px";
-                        }
+                        const { width, height } = fixJPEGScaling(resolution, displayWidth, displayHeight, imageUrl.width, imageUrl.height);
+                        imageWidth = width;
+                        imageHeight = height;
                     }
                 }
-                // Firefoxだとiframeで表示されてdata変えると挙動が変になったりするので直接img変える
-                if (this.node.contentDocument != null) {
-                    const img = this.node.contentDocument.querySelector("img");
-                    if (img != null) {
-                        img.src = imageUrl.blobUrl;
-                        return;
-                    }
+                let img = this.node.querySelector("img");
+                if (img == null) {
+                    img = new Image();
+                    this.node.appendChild(img);
+                    img.style.position = "absolute";
+                    img.style.left = "0px";
+                    img.style.top = "0px";
+                    img.style.right = "unset";
+                    img.style.bottom = "unset";
+                    img.style.margin = "0px";
+                    img.style.padding = "0px";
+                    img.style.borderWidth = "0px";
+                    img.style.background = "none";
+                    img.style.visibility = "inherit";
+                    img.style.display = "block";
                 }
-                this.node.type = imageType;
-                this.node.data = imageUrl.blobUrl;
+                img.src = imageUrl.blobUrl;
+                const width = imageWidth ?? imageUrl.width;
+                const height = imageHeight ?? imageUrl.height;
+                if (width != null && height != null) {
+                    img.style.width = width + "px";
+                    img.style.height = height + "px";
+                } else {
+                    img.style.width = "100%";
+                    img.style.height = "100%";
+                }
             })();
         }
         public get type() {
