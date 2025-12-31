@@ -388,12 +388,13 @@ export namespace BML {
                             if (!Number.isSafeInteger(gray2) || gray2 < 0 || gray2 > 255) {
                                 gray2 = 8;
                             }
-                            const colors = [computedStyle.getPropertyValue("--clut-color-" + gray1), computedStyle.getPropertyValue("--clut-color-" + gray2), computedStyle.color]
+                            const colors = [computedStyle.getPropertyValue("--clut-color-" + gray1), computedStyle.getPropertyValue("--clut-color-" + gray2), computedStyle.color];
                             const canvas = renderDRCS(drcs, colors);
                             char.style.backgroundImage = `url('${canvas.toDataURL()}')`;
                             char.style.backgroundRepeat = "no-repeat";
                             char.style.color = "transparent";
                             char.style.display = "inline-block";
+                            char.style.verticalAlign = "text-bottom";
                             char.style.width = `${drcs.width}px`;
                             char.style.height = `${drcs.height}px`;
                         }
@@ -473,11 +474,12 @@ export namespace BML {
                         if (!Number.isSafeInteger(gray2) || gray2 < 0 || gray2 > 255) {
                             gray2 = 8;
                         }
-                        const colors = [computedStyle.getPropertyValue("--clut-color-" + gray1), computedStyle.getPropertyValue("--clut-color-" + gray2), computedStyle.color]
+                        const colors = [computedStyle.getPropertyValue("--clut-color-" + gray1), computedStyle.getPropertyValue("--clut-color-" + gray2), computedStyle.color];
                         const canvas = renderDRCS(drcs, colors);
                         char.style.backgroundImage = `url('${canvas.toDataURL()}')`;
                         char.style.backgroundRepeat = "no-repeat";
                         char.style.color = "transparent";
+                        char.style.verticalAlign = "text-bottom";
                     }
                 }
                 char.style.width = `${fontWidth}px`;
