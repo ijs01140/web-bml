@@ -128,7 +128,7 @@ class CacheMap {
         // 挿入順に列挙される
         // 列挙中に削除しても安全らしい
         if (this.sizeBytes > this.maxSizeBytes || this.cachedRemoteResources.size > this.maxEntryCount) {
-            for (const [key] of this.cachedRemoteResources.keys()) {
+            for (const key of this.cachedRemoteResources.keys()) {
                 if (this.sizeBytes > this.maxSizeBytes || this.cachedRemoteResources.size > this.maxEntryCount) {
                     this.delete(key);
                 } else {
@@ -773,9 +773,9 @@ export class Resources {
         };
         if (file.cacheControl !== "no-store") {
             this.cachedRemoteResources.set(full, file);
-            for (const { resolve } of requests2) {
-                resolve(file);
-            }
+        }
+        for (const { resolve } of requests2) {
+            resolve(file);
         }
         return file;
     }
@@ -840,7 +840,7 @@ export class Resources {
     public *getLockedModules(): Generator<{ module: string, isEx: boolean, requesting: boolean }> {
         for (const [componentId, c] of this.componentRequests) {
             for (const [moduleId, m] of c.moduleRequests) {
-                for (const request of m.reverse()) {
+                for (const request of m.slice().reverse()) {
                     if (request.requestType != null) {
                         yield { module: `/${moduleAndComponentToString(componentId, moduleId)}`, isEx: request.requestType === "lockModuleOnMemoryEx", requesting: true };
                         break;
