@@ -326,10 +326,7 @@ export namespace BML {
             const marquee = document.createElement("marquee");
             marquee.behavior = style;
             if (Number.isFinite(loop)) {
-                if (loop !== 0) {
-                } else {
-                    marquee.loop = loop;
-                }
+                marquee.loop = loop;
             }
             // dirはrtl固定
             const speed = computedStyle.getPropertyValue("---wap-marquee-speed").trim().toLowerCase();
@@ -989,13 +986,13 @@ export namespace BML {
             this.ownerDocument.inputApplication?.launch({
                 characterType: ctype,
                 allowedCharacters: allowed,
-                maxLength: this.maxLength,
+                maxLength,
                 value: this.value,
                 inputMode: this.type === "password" ? "password" : "text",
                 multiline: true,
                 callback: (value) => {
                     value = getTextDecoder(this.ownerDocument.resources.profile)(getTextEncoder(this.ownerDocument.resources.profile)(value));
-                    value = value.replace(/[\n\r]/g, "").substring(0, this.maxLength);
+                    value = value.replace(/[\n\r]/g, "").substring(0, maxLength);
                     if (allowed != null) {
                         value = value.split("").filter(x => {
                             return allowed.includes(x);

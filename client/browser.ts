@@ -778,9 +778,8 @@ export class BrowserAPI {
             if (Number.isNaN(time)) {
                 return base;
             }
-            if (unit == 0) {
-                return new Date(base.getTime() + time);
-            } else if (unit == 1) {
+            // STD-B24 第二編 7.6.14: unitが有効値以外の場合はunitを0として扱う
+            if (unit == 1) {
                 return new Date(base.getTime() + (time * 1000));
             } else if (unit == 2) {
                 return new Date(base.getTime() + (time * 1000 * 60));
@@ -790,13 +789,15 @@ export class BrowserAPI {
                 return new Date(base.getTime() + (time * 1000 * 60 * 60 * 24));
             } else if (unit == 5) {
                 return new Date(base.getTime() + (time * 1000 * 60 * 60 * 24 * 7));
+            } else {
+                return new Date(base.getTime() + time);
             }
-            return NaN;
         },
         formatNumber(value: number): string | null {
-            const number = Number(value);
+            let number = Number(value);
+            // STD-B24 第二編 7.6.14: valueが有効値以外の場合はvalueを0として扱う
             if (Number.isNaN(number)) {
-                return null;
+                number = 0;
             }
             return number.toLocaleString("en-US");
         },
@@ -1170,11 +1171,11 @@ export class BrowserAPI {
         },
         playRomSound: (soundID: string): number => {
             console.log("playRomSound", soundID);
-            const groups = /romsound:\/\/(?<soundID>\d+)/.exec(soundID)?.groups;
-            if (groups != null) {
-                playRomSound(Number.parseInt(groups.soundID), this.audioNodeProvider.getAudioDestinationNode());
+            const groups = /^romsound:\/\/(?<soundID>\d+)$/.exec(soundID)?.groups;
+            if (groups == null) {
+                return NaN;
             }
-            return 1;
+            return playRomSound(Number.parseInt(groups.soundID), this.audioNodeProvider.getAudioDestinationNode()) ? 1 : NaN;
         },
         getBrowserVersion(): string[] {
             return ["BMLHTML", "BMLHTML", "001", "000"];
@@ -1293,7 +1294,7 @@ export class BrowserAPI {
             }
             // 絶対URIを使用すること
             // TR-B14 第三分冊 8.3.10.2
-            if (!documentName.startsWith("http://") && documentName.startsWith("https://")) {
+            if (!documentName.startsWith("http://") && !documentName.startsWith("https://")) {
                 return NaN;
             }
             if (!this.resources.isInternetContent) {
@@ -1319,7 +1320,12 @@ export class BrowserAPI {
                         this.setUreg(i, "");
                     }
                 }
-                this.setUreg(0, "0x" + msg.serviceId.toString(16).padStart(4));
+                this.serviceId = msg.serviceId;
+                if (this.resources.profile !== resource.Profile.TrProfileC) {
+                    this.setUreg(0, "0x" + msg.serviceId.toString(16).padStart(4, "0"));
+                } else {
+                    this.setUreg(0, "");
+                }
             }
         }
     }

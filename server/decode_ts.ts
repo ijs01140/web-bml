@@ -371,6 +371,10 @@ export function decodeTS(options: DecodeTSOptions): TsStream {
         const event = data.events[0];
         const duration = new TsDate(event.duration).decodeTime();
         const durationSeconds = duration[0] * 3600 + duration[1] * 60 + duration[2];
+        // STD-B10: duration全ビット1 (0xFFFFFF)は継続時間未定
+        // そのときdecodeTime()はBCDとして[165,165,165]になりdurationSecondsは巨大な値になる
+        // browser.epgGetEventDurationは未定時の戻り値が仕様上定められていないため、
+        // durationSecondsはそのまま残し、未定であることだけindefiniteDurationで伝える
         const indefiniteDuration = event.duration[0] === 0xff && event.duration[1] === 0xff && event.duration[2] === 0xff;
         const startTime =  new TsDate(event.start_time).decode();
         const eventId: number = event.event_id;
@@ -432,21 +436,25 @@ export function decodeTS(options: DecodeTSOptions): TsStream {
         let originalNetworkId = data.transmission_info[1].network_id;
         let transportStreamId = null;
 
-        let tot_descriptor;
-        const transmission_tot = data.transmission_info.filter((data: any) => data.descriptor_tag === 0xC3);
-        const service_tot = services.filter((data: any) => data.descriptor_tag === 0xC3);
-        let jst_time = 0;
-        let event_start_time = 0;
+        const transmission_tot = data.transmission_info.filter((data: { [key: string]: any }) => data.descriptor_tag === 0xC3);
+        const service_tot = services.filter((data: { [key: string]: any }) => data.descriptor_tag === 0xC3);
 
-        if (transmission_tot.length > 0) {
-            tot_descriptor = transmission_tot;
+        // JSTはjst_time_flag=1のときだけ有効なので、フラグ付きを1st→2ndの順で探す
+        let jst_time: number | null = null;
+        for (const descriptor of [...transmission_tot, ...service_tot]) {
+            if (descriptor.jst_time_flag === 1 && descriptor.jst_time != null) {
+                jst_time = new TsDate(descriptor.jst_time).decode().getTime();
+                break;
+            }
         }
-        else if (service_tot.length > 0) {
-            tot_descriptor = service_tot;
-        }
-        if (tot_descriptor) {
-            jst_time = new TsDate(tot_descriptor[0].jst_time).decode().getTime();
-            event_start_time = new TsDate(service_tot[0].event_start_time).decode().getTime();
+
+        // event_start_timeは2nd loopでのみ有効
+        let event_start_time: number | null = null;
+        if (service_tot.length > 0) {
+            const eventStartTimeBytes: Buffer | undefined = service_tot[0].event_start_time;
+            if (eventStartTimeBytes != null && !eventStartTimeBytes.every((byte: number) => byte === 0xff)) {
+                event_start_time = new TsDate(eventStartTimeBytes).decode().getTime();
+            }
         }
 
         const event_group_descriptor = services.filter((data: any) => data.descriptor_tag === 0xD6);
@@ -478,7 +486,7 @@ export function decodeTS(options: DecodeTSOptions): TsStream {
         };
         send(currentProgramInfo);
 
-        if (currentTime !== jst_time) {
+        if (jst_time != null && currentTime !== jst_time) {
             currentTime = jst_time;
             send({
                 type: "currentTime",
@@ -869,24 +877,24 @@ function decodeAdditionalAribBXMLInfo(additional_data_component_info: Buffer): A
         // CSではbml_major_versionは2
         // 地上波ではbml_major_versionは3
         if (default_version_flag === 0) {
-            let bml_major_version = additional_data_component_info[off] << 16;
+            let bml_major_version = additional_data_component_info[off] << 8;
             off++;
             bml_major_version |= additional_data_component_info[off];
             bxmlInfo.entryPointInfo.bmlMajorVersion = bml_major_version;
             off++;
-            let bml_minor_version = additional_data_component_info[off] << 16;
+            let bml_minor_version = additional_data_component_info[off] << 8;
             off++;
             bml_minor_version |= additional_data_component_info[off];
             bxmlInfo.entryPointInfo.bmlMinorVersion = bml_minor_version;
             off++;
             // 運用されない
             if (use_xml == 1) {
-                let bxml_major_version = additional_data_component_info[off] << 16;
+                let bxml_major_version = additional_data_component_info[off] << 8;
                 off++;
                 bxml_major_version |= additional_data_component_info[off];
                 bxmlInfo.entryPointInfo.bxmlMajorVersion = bxml_major_version;
                 off++;
-                let bxml_minor_version = additional_data_component_info[off] << 16;
+                let bxml_minor_version = additional_data_component_info[off] << 8;
                 off++;
                 bxml_minor_version |= additional_data_component_info[off];
                 bxmlInfo.entryPointInfo.bxmlMinorVersion = bxml_minor_version;
