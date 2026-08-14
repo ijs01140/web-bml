@@ -1,6 +1,5 @@
 import { NVRAM } from "./nvram";
 import * as resource from "./resource";
-import { Buffer } from "buffer";
 import * as drcs from "./drcs";
 import { Interpreter } from "./interpreter/interpreter";
 import { EventDispatcher, EventQueue } from "./event_queue";
@@ -9,7 +8,7 @@ import { ResponseMessage } from "../server/ws_api";
 import { playRomSound } from "./romsound";
 import { AudioNodeProvider, Indicator, IP, Reg } from "./bml_browser";
 import { decodeEUCJP, encodeEUCJP, stripStringEUCJP } from "./euc_jp";
-import { decodeShiftJIS, encodeShiftJIS } from "./shift_jis";
+import { decodeShiftJIS, encodeShiftJIS, stripStringShiftJIS } from "./shift_jis";
 import { type Logger } from "./util/logger";
 // browser疑似オブジェクト
 
@@ -590,13 +589,13 @@ export class BrowserAPI {
             if (res?.data == null) {
                 return NaN;
             }
-            this.content.loadDRCS(drcs.loadDRCS(Buffer.from(res.data)));
+            this.content.loadDRCS(drcs.loadDRCS(res.data));
             for (const [id, fontFamily] of [
                 [1, "丸ゴシック"],
                 [2, "角ゴシック"],
                 [3, "太丸ゴシック"],
             ]) {
-                const glyph = drcs.loadDRCS(Buffer.from(res.data), id as number);
+                const glyph = drcs.loadDRCS(res.data, id as number);
                 const { ttf, unicodeCharacters } = drcs.toTTF(glyph);
                 if (unicodeCharacters.length === 0) {
                     continue;
@@ -692,7 +691,7 @@ export class BrowserAPI {
 
     public setGreg(index: number, value: string) {
         if (index >= 0 && index < this.browser.Greg.length) {
-            this.greg.setReg(index, stripStringEUCJP(value, 256));
+            this.greg.setReg(index, this.resources.profile === resource.Profile.TrProfileC ? stripStringShiftJIS(value, 256) : stripStringEUCJP(value, 256));
         }
     }
 
@@ -706,7 +705,7 @@ export class BrowserAPI {
 
     public setUreg(index: number, value: string) {
         if (index >= 0 && index < this.browser.Ureg.length) {
-            this.ureg.setReg(index, stripStringEUCJP(value, 256));
+            this.ureg.setReg(index, this.resources.profile === resource.Profile.TrProfileC ? stripStringShiftJIS(value, 256) : stripStringEUCJP(value, 256));
         }
     }
 

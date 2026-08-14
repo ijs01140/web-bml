@@ -1,10 +1,9 @@
-import { Buffer } from "buffer";
 import { TSReader } from "arib-mmt-tlv-ts/ts/reader.js";
 import { decodeSIText } from "arib-mmt-tlv-ts/ts/si-text-decoder.js";
 import { bcdTimeToSeconds, mjdBCDToUnixEpoch } from "arib-mmt-tlv-ts/utils.js";
-import { type TSPacket } from "arib-mmt-tlv-ts/ts/packet.js";
+import { PESReader } from "arib-mmt-tlv-ts/ts/pes-reader.js";
 import { unzlibSync } from "fflate";
-import { EntityParser, MediaType, parseMediaType, entityHeaderToString, parseMediaTypeFromString } from "./entity_parser";
+import { EntityParser, type MediaType, parseMediaType, entityHeaderToString, parseMediaTypeFromString } from "./entity_parser";
 import * as wsApi from "./ws_api";
 import type { ComponentPMT, AdditionalAribBXMLInfo } from "./ws_api";
 
@@ -35,7 +34,7 @@ type DownloadModuleInfo = {
 type CachedModuleFile = {
     contentType: MediaType,
     contentLocation: string | null,
-    data: Buffer,
+    data: Uint8Array,
 };
 
 type CachedModule = {
@@ -53,6 +52,55 @@ export type DecodeTSOptions = {
 type CachedComponent = {
     modules: Map<number, CachedModule>,
 };
+
+const utf8Decoder = new TextDecoder("utf-8");
+
+let base64Table: string[] = [];
+
+function toBase64(input: Uint8Array): string {
+    // Node 25からなため
+    if ("toBase64" in Uint8Array.prototype) {
+        return input.toBase64();
+    }
+    if (base64Table.length === 0) {
+        base64Table = Array.from({ length: 64 }).map((_, i) => globalThis.btoa(String.fromCharCode(i << 2)).charAt(0));
+    }
+    let result = "";
+    for (let i = 0; i + 3 <= input.length; i += 3) {
+        const t = (input[i] << 16) | (input[i + 1] << 8) | (input[i + 2]);
+        result += base64Table[(t >> 18) & 63];
+        result += base64Table[(t >> 12) & 63];
+        result += base64Table[(t >> 6) & 63];
+        result += base64Table[t & 63];
+    }
+    if (input.length % 3 === 1) {
+        const t = input[input.length - 1] << 16;
+        result += base64Table[(t >> 18) & 63];
+        result += base64Table[(t >> 12) & 63];
+        result += "==";
+    } else if (input.length % 3 === 2) {
+        const t = (input[input.length - 2] << 16) | (input[input.length - 1] << 8);
+        result += base64Table[(t >> 18) & 63];
+        result += base64Table[(t >> 12) & 63];
+        result += base64Table[(t >> 6) & 63];
+        result += "=";
+    }
+    return result;
+}
+
+function concatBuffers(buffers: Uint8Array[]): Uint8Array {
+    if (buffers.length === 1) {
+        return buffers[0];
+    }
+    const total = buffers.reduce((p, c) => p + c.length, 0);
+    const result = new Uint8Array(total);
+    let offset = 0;
+    for (const buffer of buffers) {
+        result.set(buffer, offset);
+        offset += buffer.length;
+    }
+    return result;
+}
 
 export function decodeTS(options: DecodeTSOptions) {
     const reader = new TSReader();
@@ -84,7 +132,7 @@ export function decodeTS(options: DecodeTSOptions) {
     let pcrPID: number | null = null;
     // 字幕/文字スーパーのPESのPID
     let privatePes = new Set<number>();
-    let privatePesBuffers = new Map<number, { length: number; received: number; buffer: Uint8Array[]; continuityCounter: number }>();
+    let privatePesReaders = new Map<number, PESReader>();
 
     // ワンセグの場合0x1fc8-0x1fcfまでの固定PIDでPMTでワンセグのみを受信している場合PATは受信されない
     // ワンセグPMTを10回受信する間にPATが未受信であればワンセグだと判定
@@ -161,7 +209,7 @@ export function decodeTS(options: DecodeTSOptions) {
                         dataComponentId == 0x07 || // BS
                         dataComponentId == 0x0B // CS
                     ) {
-                        bxmlInfo = decodeAdditionalAribBXMLInfo(Buffer.from(esInfo.additionalDataComponentInfo));
+                        bxmlInfo = decodeAdditionalAribBXMLInfo(esInfo.additionalDataComponentInfo);
                     }
                 }
             }
@@ -196,72 +244,19 @@ export function decodeTS(options: DecodeTSOptions) {
         }
     });
 
-
-    function onPrivatePESPacket(packet: TSPacket) {
-        if (packet.transportScramblingControl !== 0) {
-            return;
-        }
-        let buffer = privatePesBuffers.get(packet.pid);
-        if (packet.payloadUnitStartIndicator) {
-            privatePesBuffers.delete(packet.pid);
-        }
-        if (packet.payloadUnitStartIndicator && buffer?.length === 0 && buffer?.buffer.length > 0) {
-            if (((buffer.continuityCounter + 1) & 15) === packet.continuityCounter) {
-                const msg = decodePES(Buffer.concat(buffer.buffer));
-                if (msg != null) {
-                    send(msg);
-                }
-            }
-        }
-        const payload = packet.data.slice(packet.payloadOffset);
-        if (packet.payloadUnitStartIndicator) {
-            if (payload.length > 6) {
-                if (payload[0] !== 0x00 || payload[1] !== 0x00 || payload[2] !== 0x01) {
-                    privatePesBuffers.delete(packet.pid);
-                    return;
-                } else {
-                    const length = (payload[4] << 8) | payload[5];
-                    if (length === 0) {
-                        buffer = { length: 0, received: payload.length, buffer: [payload], continuityCounter: packet.continuityCounter };
-                    } else {
-                        buffer = { length: length + 6, received: payload.length, buffer: [payload], continuityCounter: packet.continuityCounter };
-                    }
-                    privatePesBuffers.set(packet.pid, buffer);
-                }
-            }
-        } else {
-            if (buffer == null) {
-                return;
-            }
-            if (buffer.continuityCounter === packet.continuityCounter) {
-                return;
-            }
-            if (((buffer.continuityCounter + 1) & 15) !== packet.continuityCounter) {
-                privatePesBuffers.delete(packet.pid);
-                return;
-            }
-            buffer.continuityCounter = packet.continuityCounter;
-            buffer.buffer.push(payload);
-            buffer.received += payload.length;
-        }
-        if (buffer == null) {
-            return;
-        }
-        if (buffer.length !== 0 && buffer.length <= buffer.received) {
-            privatePesBuffers.delete(packet.pid);
-            const msg = decodePES(Buffer.concat(buffer.buffer).subarray(0, buffer.length));
-            if (msg != null) {
-                send(msg);
-            }
-        }
-    }
-
     reader.addEventListener("packet", ({ packet }) => {
         if (packet.transportErrorIndicator) {
             return;
         }
         if (privatePes.has(packet.pid)) {
-            onPrivatePESPacket(packet);
+            const reader = privatePesReaders.get(packet.pid) ?? new PESReader();
+            privatePesReaders.set(packet.pid, reader);
+            for (const data of reader.pushPacket(packet)) {
+                const msg = decodePES(data);
+                if (msg != null) {
+                    send(msg);
+                }
+            }
         }
         if (packet.pid !== pcrPID) {
             return;
@@ -524,7 +519,7 @@ export function decodeTS(options: DecodeTSOptions) {
                 for (const info of module.moduleInfoDescriptors) {
                     // Type記述子, ダウンロード推定時間記述子, Compression Type記述子のみ運用される(TR-B14 第三分冊 4.2.4 表4-4参照)
                     if (info.tag === "type") { // Type記述子 STD-B24 第三分冊 第三編 6.2.3.1
-                        const contentType = Buffer.from(info.text).toString("ascii");
+                        const contentType = utf8Decoder.decode(info.text);
                         moduleInfo.contentType = contentType;
                     } else if (info.tag === "estDownloadTime") { // ダウンロード推定時間記述子 STD-B24 第三分冊 第三編 6.2.3.6
                     } else if (info.tag === "compressionType") { // Compression Type記述子 STD-B24 第三分冊 第三編 6.2.3.9
@@ -605,7 +600,7 @@ export function decodeTS(options: DecodeTSOptions) {
                     downloadModuleInfo: moduleInfo,
                     dataEventId: data_event_id,
                 };
-                let moduleData = Buffer.concat(moduleInfo.blocks as Uint8Array[]);
+                let moduleData = concatBuffers(moduleInfo.blocks as Uint8Array[]);
                 moduleInfo.blocks = undefined;
                 const previousCachedModule = cachedComponent.modules.get(moduleInfo.moduleId);
                 if (previousCachedModule != null && previousCachedModule.downloadModuleInfo.moduleVersion === moduleInfo.moduleVersion && previousCachedModule.dataEventId === moduleInfo.dataEventId) {
@@ -613,8 +608,7 @@ export function decodeTS(options: DecodeTSOptions) {
                     return;
                 }
                 if (moduleInfo.compressionType === CompressionType.Zlib) {
-                    const r = unzlibSync(moduleData);
-                    moduleData = Buffer.from(r.buffer, r.byteOffset, r.byteLength);
+                    moduleData = unzlibSync(moduleData);
                 }
                 const mediaType = moduleInfo.contentType == null ? null : parseMediaTypeFromString(moduleInfo.contentType).mediaType;
                 // console.info(`component ${componentId.toString(16).padStart(2, "0")} module ${moduleId.toString(16).padStart(4, "0")}updated`);
@@ -660,7 +654,7 @@ export function decodeTS(options: DecodeTSOptions) {
                             files: [...files.values()].map(x => ({
                                 contentType: x.contentType,
                                 contentLocation: x.contentLocation,
-                                dataBase64: x.data.toString("base64"),
+                                dataBase64: toBase64(x.data),
                             })),
                             version: moduleVersion,
                             dataEventId: data_event_id,
@@ -681,7 +675,7 @@ export function decodeTS(options: DecodeTSOptions) {
                         files: [...files.values()].map(x => ({
                             contentType: x.contentType,
                             contentLocation: x.contentLocation,
-                            dataBase64: x.data.toString("base64"),
+                            dataBase64: toBase64(x.data),
                         })),
                         version: moduleVersion,
                         dataEventId: data_event_id,
@@ -744,7 +738,7 @@ export function decodeTS(options: DecodeTSOptions) {
     return reader;
 }
 
-function decodeAdditionalAribBXMLInfo(additional_data_component_info: Buffer): AdditionalAribBXMLInfo {
+function decodeAdditionalAribBXMLInfo(additional_data_component_info: Uint8Array): AdditionalAribBXMLInfo {
     let off = 0;
     // 地上波についてはTR-B14 第二分冊 2.1.4 表2-3を参照
     // BSについてはTR-B15 第一分冊 5.1.5 表5-4を参照
@@ -859,7 +853,7 @@ function decodeAdditionalAribBXMLInfo(additional_data_component_info: Buffer): A
     return bxmlInfo;
 }
 
-function decodePES(pes: Buffer): wsApi.PESMessage | null {
+function decodePES(pes: Uint8Array): wsApi.PESMessage | null {
     let pos = 0;
     if (pes.length < 5) {
         return null;
@@ -867,10 +861,11 @@ function decodePES(pes: Buffer): wsApi.PESMessage | null {
     if (pes[0] !== 0 || pes[1] !== 0 || pes[2] !== 1) {
         return null;
     }
+    const view = new DataView(pes.buffer, pes.byteOffset, pes.byteLength);
     pos += 3;
-    const streamId = pes.readUInt8(pos);
+    const streamId = view.getUint8(pos);
     pos++;
-    const pesPacketLength = pes.readUInt16BE(pos);
+    const pesPacketLength = view.getUint16(pos);
     pos += 2;
     if (streamId === 0xBF) {
         return {
@@ -906,9 +901,9 @@ function decodePES(pes: Buffer): wsApi.PESMessage | null {
     if (ptsDTSIndicator === 0b10 || ptsDTSIndicator === 0b11) {
         const pts3230 = (pes[pos] >> 1) & 0b111;
         pos++;
-        const pts2915 = pes.readUInt16BE(pos) >> 1;
+        const pts2915 = view.getUint16(pos) >> 1;
         pos += 2;
-        const pts1400 = pes.readUInt16BE(pos) >> 1;
+        const pts1400 = view.getUint16(pos) >> 1;
         pos += 2;
         pts = pts1400 + (pts2915 << 15) + (pts3230 * 0x40000000);
     }

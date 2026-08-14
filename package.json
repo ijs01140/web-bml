@@ -1,6 +1,6 @@
 {
   "name": "web-bml",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "main": "./dist/client/bml_browser.js",
   "license": "MIT",
   "scripts": {
@@ -8,6 +8,7 @@
     "watch": "tsc -w"
   },
   "files": [
+    "src",
     "dist"
   ],
   "exports": {
@@ -29,7 +30,7 @@
     }
   },
   "dependencies": {
-    "arib-mmt-tlv-ts": "^2.0.1",
+    "arib-mmt-tlv-ts": "^2.0.2",
     "crc-32": "^1.2.2",
     "css": "https://github.com/otya128/reworkcss-css/releases/download/v3.0.2/css-3.0.2.tgz",
     "fast-xml-parser": "^4.0.11",
@@ -38,7 +39,7 @@
   "devDependencies": {
     "@types/css": "^0.0.38",
     "@types/node": "^26.2.0",
-    "typescript": "^5.9.2"
+    "typescript": "^6.0.3"
   },
   "workspaces": [
     "example",
