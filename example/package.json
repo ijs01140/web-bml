@@ -29,6 +29,7 @@
     "devDependencies": {
         "@types/koa": "^2.13.4",
         "@types/koa-router": "^7.4.4",
+        "@types/node": "^26.5.0",
         "@types/react": "^18.0.18",
         "@types/react-dom": "^18.0.6",
         "@types/ws": "^8.18.1",
